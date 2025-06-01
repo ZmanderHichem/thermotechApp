@@ -26,7 +26,7 @@ class _RdvSuggererState extends State<RdvSuggerer> with SingleTickerProviderStat
       vsync: this,
     );
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
     _animationController.forward();
   }
@@ -43,78 +43,17 @@ class _RdvSuggererState extends State<RdvSuggerer> with SingleTickerProviderStat
       stream: _rdvSuggererCollection.snapshots(),
       builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
         if (snapshot.hasError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                const SizedBox(height: 16),
-                Text(
-                  'Une erreur est survenue',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  snapshot.error.toString(),
-                  style: Theme.of(context).textTheme.bodyMedium,
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          );
+          return ErrorDisplay(error: snapshot.error.toString());
         }
 
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(),
-          );
+          return const LoadingDisplay();
         }
 
         final documents = snapshot.data!.docs;
 
         if (documents.isEmpty) {
-          return FadeTransition(
-            opacity: _fadeAnimation,
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.calendar_today, size: 48, color: Colors.grey),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Aucun rendez-vous suggéré',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          color: Colors.grey[600],
-                        ),
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => AddRdvPage(
-                            name: 'Nom introuvable',
-                            tel: 'tel introuvable',
-                          ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.add),
-                    label: const Text('Ajouter un rendez-vous'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).primaryColor,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
+          return const EmptyStateDisplay();
         }
 
         return FutureBuilder(
@@ -131,14 +70,13 @@ class _RdvSuggererState extends State<RdvSuggerer> with SingleTickerProviderStat
               'latestTimestamp': latestTimestamp,
             };
           }).toList()),
-          builder: (context,
-              AsyncSnapshot<List<Map<String, dynamic>>> sortedSnapshot) {
+          builder: (context, AsyncSnapshot<List<Map<String, dynamic>>> sortedSnapshot) {
             if (sortedSnapshot.hasError) {
-              return Center(child: Text('Error: ${sortedSnapshot.error}'));
+              return ErrorDisplay(error: sortedSnapshot.error.toString());
             }
 
             if (sortedSnapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
+              return const LoadingDisplay();
             }
 
             final sortedDocuments = sortedSnapshot.data!..sort((a, b) {
@@ -165,20 +103,18 @@ class _RdvSuggererState extends State<RdvSuggerer> with SingleTickerProviderStat
 
                   return Hero(
                     tag: 'suggestion_${doc.id}',
-                    child: Material(
-                      child: SuggestionCard(
-                        contactName: contactName,
-                        phoneNumber: tel,
-                        note: note,
-                        latestTimestamp: latestTimestamp != null
-                            ? DateTime.fromMillisecondsSinceEpoch(latestTimestamp)
-                            : null,
-                        onEdit: () => _editName(context, doc, contactName, tel),
-                        onSaveNote: (newNote) => _saveNote(doc.reference, newNote),
-                        onShowRecordings: () => _showRecordings(context, doc.reference),
-                        onAddAppointment: () => _addAppointment(context, contactName, tel),
-                        onDelete: () => _deleteDocument(context, doc, tel),
-                      ),
+                    child: SuggestionCard(
+                      contactName: contactName,
+                      phoneNumber: tel,
+                      note: note,
+                      latestTimestamp: latestTimestamp != null
+                          ? DateTime.fromMillisecondsSinceEpoch(latestTimestamp)
+                          : null,
+                      onEdit: () => _editName(context, doc, contactName, tel),
+                      onSaveNote: (newNote) => _saveNote(doc.reference, newNote),
+                      onShowRecordings: () => _showRecordings(context, doc.reference),
+                      onAddAppointment: () => _addAppointment(context, contactName, tel),
+                      onDelete: () => _deleteDocument(context, doc, tel),
                     ),
                   );
                 },
@@ -394,6 +330,93 @@ class _RdvSuggererState extends State<RdvSuggerer> with SingleTickerProviderStat
         }
       }
     }
+  }
+}
+
+class ErrorDisplay extends StatelessWidget {
+  final String error;
+
+  const ErrorDisplay({super.key, required this.error});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, size: 48, color: Colors.red),
+          const SizedBox(height: 16),
+          Text(
+            'Une erreur est survenue',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            error,
+            style: Theme.of(context).textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LoadingDisplay extends StatelessWidget {
+  const LoadingDisplay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: CircularProgressIndicator(),
+    );
+  }
+}
+
+class EmptyStateDisplay extends StatelessWidget {
+  const EmptyStateDisplay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.calendar_today, size: 48, color: Colors.grey),
+          const SizedBox(height: 16),
+          Text(
+            'Aucun rendez-vous suggéré',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: Colors.grey[600],
+                ),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => AddRdvPage(
+                    name: 'Nom introuvable',
+                    tel: 'tel introuvable',
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.add),
+            label: const Text('Ajouter un rendez-vous'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
