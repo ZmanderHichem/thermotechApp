@@ -62,6 +62,30 @@ class _RdvSuggererState extends State<RdvSuggerer> {
                         color: Colors.grey[600],
                       ),
                 ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => AddRdvPage(
+                          name: 'Nom introuvable',
+                          tel: 'tel introuvable',
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Ajouter un rendez-vous'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).primaryColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                  ),
+                ),
               ],
             ),
           );
@@ -142,6 +166,8 @@ class _RdvSuggererState extends State<RdvSuggerer> {
         content: TextField(
           controller: nameController,
           decoration: const InputDecoration(labelText: 'Nouveau nom'),
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
         ),
         actions: [
           TextButton(
@@ -150,7 +176,7 @@ class _RdvSuggererState extends State<RdvSuggerer> {
           ),
           ElevatedButton(
             onPressed: () async {
-              final newName = nameController.text;
+              final newName = nameController.text.trim();
               if (newName.isNotEmpty) {
                 try {
                   await FirebaseFirestore.instance.runTransaction((transaction) async {
@@ -167,13 +193,20 @@ class _RdvSuggererState extends State<RdvSuggerer> {
                   if (mounted) {
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Nom modifié avec succès')),
+                      const SnackBar(
+                        content: Text('Nom modifié avec succès'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
                     );
                   }
                 } catch (e) {
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Erreur: $e')),
+                      SnackBar(
+                        content: Text('Erreur: $e'),
+                        backgroundColor: Colors.red,
+                        behavior: SnackBarBehavior.floating,
+                      ),
                     );
                   }
                 }
@@ -188,16 +221,23 @@ class _RdvSuggererState extends State<RdvSuggerer> {
 
   Future<void> _saveNote(DocumentReference docRef, String note) async {
     try {
-      await docRef.update({'note': note});
+      await docRef.update({'note': note.trim()});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Note enregistrée')),
+          const SnackBar(
+            content: Text('Note enregistrée'),
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur: $e')),
+          SnackBar(
+            content: Text('Erreur: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
     }
@@ -227,17 +267,21 @@ class _RdvSuggererState extends State<RdvSuggerer> {
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: ListView.builder(
-                  itemCount: recordsSnapshot.docs.length,
-                  itemBuilder: (context, index) {
-                    final record = recordsSnapshot.docs[index];
-                    return AudioPlayerTile(
-                      url: record['url'],
-                      timestamp: DateTime.fromMillisecondsSinceEpoch(
-                          record['timestamp']),
-                    );
-                  },
-                ),
+                child: recordsSnapshot.docs.isEmpty
+                    ? const Center(
+                        child: Text('Aucun enregistrement disponible'),
+                      )
+                    : ListView.builder(
+                        itemCount: recordsSnapshot.docs.length,
+                        itemBuilder: (context, index) {
+                          final record = recordsSnapshot.docs[index];
+                          return AudioPlayerTile(
+                            url: record['url'],
+                            timestamp: DateTime.fromMillisecondsSinceEpoch(
+                                record['timestamp']),
+                          );
+                        },
+                      ),
               ),
             ],
           ),
@@ -298,13 +342,20 @@ class _RdvSuggererState extends State<RdvSuggerer> {
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Rendez-vous supprimé')),
+            const SnackBar(
+              content: Text('Rendez-vous supprimé'),
+              behavior: SnackBarBehavior.floating,
+            ),
           );
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Erreur: $e')),
+            SnackBar(
+              content: Text('Erreur: $e'),
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+            ),
           );
         }
       }
@@ -373,6 +424,7 @@ class SuggestionCard extends StatelessWidget {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text('Numéro copié dans le presse-papier'),
+                        behavior: SnackBarBehavior.floating,
                       ),
                     );
                   },
