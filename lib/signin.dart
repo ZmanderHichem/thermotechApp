@@ -1,10 +1,8 @@
 import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-//import 'package:flutter_application_1/mainHome.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:saadoun/auth.dart';
 import 'package:saadoun/localStorage.dart';
@@ -23,231 +21,219 @@ class SignIn extends StatefulWidget {
 class _SignInState extends State<SignIn> {
   final TextEditingController _controllerEmail = TextEditingController();
   final TextEditingController _controllerPassword = TextEditingController();
-
-  String? errorMessage = "";
-  bool isLoading = false; // Add this line
-void test() async {
-  final plugin = DeviceInfoPlugin();
-  final android = await plugin.androidInfo;
-  print(android.version.sdkInt);
-
-  final storageStatus = android.version.sdkInt < 33
-      ? await Permission.storage.request()
-      : PermissionStatus.granted;
-
-  if (storageStatus == PermissionStatus.granted) {
-    print("granted");
-  }
-  if (storageStatus == PermissionStatus.denied) {
-    print("denied");
-  }
-  if (storageStatus == PermissionStatus.permanentlyDenied) {
-    openAppSettings();
-  }
-}
-
-  Future<void> addToLocalStorage(String key, String value) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    prefs.setString(key, value);
-    print('Data added to local storage');
-  }
-
-  LStorage lStorage = LStorage();
+  final _formKey = GlobalKey<FormState>();
+  bool _obscurePassword = true;
+  String? errorMessage;
+  bool isLoading = false;
 
   @override
   void initState() {
     super.initState();
     FirebaseAuth.instance.authStateChanges().listen((User? user) {
       if (user != null) {
-        
-        print('User is signed in');
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => BottomNavigation()),
+          MaterialPageRoute(builder: (context) => const BottomNavigation()),
         );
-      } 
-    });
-  }
-
-  Future<Map<String, dynamic>> getUserData() async {
-    User? user = FirebaseAuth.instance.currentUser;
-    print('Userrrrrrrrrr: $user');
-    print('UserrrrrrrrrrUID: ${user?.uid}');
-    if (user?.uid != null) {
-      DocumentSnapshot<Map<String, dynamic>> snapshot = await FirebaseFirestore
-          .instance
-          .collection('users')
-          .doc(user?.uid)
-          .get();
-
-      if (snapshot.exists) {
-        Map<String, dynamic> userData = snapshot.data()!;
-        print("userDataaaaa");
-        print(userData);
-        return userData;
-      } else {
-        print('User document does not exist');
-        return {};
       }
-    } else {
-      print('User is not signed in');
-      return {};
-    }
+    });
   }
 
   Future<void> signInWithEmailAndPassword(BuildContext context) async {
-    setState(() {
-      isLoading = true; // Show loading indicator
-    });
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => isLoading = true);
 
     try {
-      await Auth()
-          .signInWithEmailAndPassword(
-            email: _controllerEmail.text,
-            password: _controllerPassword.text,
-          )
-          .then((value) => getUserData().then((userData) async {
-                print('User Data: $userData');
-                String jsonMap = jsonEncode(userData);
-                lStorage
-                    .addToLocalStorage('userData', jsonMap)
-                    .then((value) => {
-                          print('S7iii7'),
-                        });
-              }).then((value) => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => BottomNavigation()),
-                  )));
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        errorMessage = e.code;
-        // Show SnackBar with error message
+      await Auth().signInWithEmailAndPassword(
+        email: _controllerEmail.text.trim(),
+        password: _controllerPassword.text,
+      );
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Padding(
-              padding: const EdgeInsets.only(bottom: 10), // Add bottom margin here
-              child: Text(
-                errorMessage!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ), // Change font size here
-              ),
-            ),
-            backgroundColor: const Color.fromARGB(
-                255, 207, 62, 52), // Change background color here
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30), // Change shape here
-            ),
-          ),
+      final userData = await getUserData();
+      final jsonMap = jsonEncode(userData);
+      await LStorage().addToLocalStorage('userData', jsonMap);
+
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const BottomNavigation()),
         );
-      });
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() => errorMessage = e.message);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.message ?? 'Une erreur est survenue',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 16),
+          ),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      );
     } finally {
-      setState(() {
-        isLoading = false; // Hide loading indicator
-      });
+      if (mounted) setState(() => isLoading = false);
     }
+  }
+
+  Future<Map<String, dynamic>> getUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user?.uid != null) {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user!.uid)
+          .get();
+      return snapshot.exists ? snapshot.data()! : {};
+    }
+    return {};
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(
-                  left: 20.0, right: 20.0), // Adjust the left padding as needed
-              child: Column(
-                children: [
-                  const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        'Login',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                        ),
-                      ),
-                      SizedBox(width: 40),
-                    ],
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 48),
+                Text(
+                  'Bienvenue',
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
                   ),
-                  const SizedBox(height: 100),
-                  TextField(
-                    controller: _controllerEmail,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Votre Email',
-                      icon: Icon(Icons.email),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Connectez-vous pour continuer',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: Colors.grey[600],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 48),
+                TextFormField(
+                  controller: _controllerEmail,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon: Icon(Icons.email_outlined),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez entrer votre email';
+                    }
+                    if (!value.contains('@')) {
+                      return 'Veuillez entrer un email valide';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _controllerPassword,
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
+                    labelText: 'Mot de passe',
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () {
+                        setState(() => _obscurePassword = !_obscurePassword);
+                      },
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  TextField(
-                    controller: _controllerPassword,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                      icon: Icon(Icons.lock),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      TextButton(
-                        onPressed: () {
-                          Auth().resetPassword(_controllerEmail.text);
-                        },
-                        child: const Text(
-                          'Forget your Password',
-                          style: TextStyle(
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ),
-                      ElevatedButton(
-                        onPressed: () {
-                          // Pass context to signInWithEmailAndPassword function
-                          signInWithEmailAndPassword(context);
-                        },
-                        child: const Text('Log In'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    "You don't have an account?",
-                    style: TextStyle(
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextButton(
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez entrer votre mot de passe';
+                    }
+                    if (value.length < 6) {
+                      return 'Le mot de passe doit contenir au moins 6 caractères';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
                     onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => SignUp()),
-                      );
+                      if (_controllerEmail.text.isNotEmpty) {
+                        Auth().resetPassword(_controllerEmail.text);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Un email de réinitialisation a été envoyé',
+                              textAlign: TextAlign.center,
+                            ),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Veuillez entrer votre email',
+                              textAlign: TextAlign.center,
+                            ),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
                     },
-                    child: const Text(
-                      'Sign up',
-                      style: TextStyle(
-                        color: Colors.blue,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                    child: const Text('Mot de passe oublié ?'),
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: isLoading
+                      ? null
+                      : () => signInWithEmailAndPassword(context),
+                  child: isLoading
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text('Se connecter'),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Pas encore de compte ?',
+                      style: Theme.of(context).textTheme.bodyLarge,
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => const SignUp()),
+                        );
+                      },
+                      child: const Text('S\'inscrire'),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            if (isLoading)
-              const Center(
-                child: CircularProgressIndicator(), // Replace with your loading GIF if needed
-              ),
-          ],
+          ),
         ),
       ),
     );
