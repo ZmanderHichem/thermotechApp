@@ -1,2 +1,0 @@
-C:/Users/Zmander Hichem/Desktop/Electrogel-youssef/android/app/.cxx/Debug/5v4p6b72/arm64-v8a/CMakeFiles/edit_cache.dir
-C:/Users/Zmander Hichem/Desktop/Electrogel-youssef/android/app/.cxx/Debug/5v4p6b72/arm64-v8a/CMakeFiles/rebuild_cache.dir
