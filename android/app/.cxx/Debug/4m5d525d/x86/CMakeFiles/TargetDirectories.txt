@@ -1,0 +1,2 @@
+/Users/zmanderyoussef/Electrogel/android/app/.cxx/Debug/4m5d525d/x86/CMakeFiles/edit_cache.dir
+/Users/zmanderyoussef/Electrogel/android/app/.cxx/Debug/4m5d525d/x86/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "922795254650",
+    "project_id": "login-e6dc3",
+    "storage_bucket": "login-e6dc3.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:922795254650:android:86fdc49ddd73d983f9acc3",
+        "android_client_info": {
+          "package_name": "com.example.saadoun"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAb-iom6SDXlwpOFZsAFZD-Z0vs2HBEVtM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
