@@ -12,9 +12,30 @@ class RdvSuggerer extends StatefulWidget {
   _RdvSuggererState createState() => _RdvSuggererState();
 }
 
-class _RdvSuggererState extends State<RdvSuggerer> {
+class _RdvSuggererState extends State<RdvSuggerer> with SingleTickerProviderStateMixin {
   final CollectionReference _rdvSuggererCollection =
       FirebaseFirestore.instance.collection('rdv_suggerer');
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+    );
+    _animationController.forward();
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -44,49 +65,54 @@ class _RdvSuggererState extends State<RdvSuggerer> {
         }
 
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(
+            child: CircularProgressIndicator(),
+          );
         }
 
         final documents = snapshot.data!.docs;
 
         if (documents.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.calendar_today, size: 48, color: Colors.grey),
-                const SizedBox(height: 16),
-                Text(
-                  'Aucun rendez-vous suggéré',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: Colors.grey[600],
-                      ),
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => AddRdvPage(
-                          name: 'Nom introuvable',
-                          tel: 'tel introuvable',
+          return FadeTransition(
+            opacity: _fadeAnimation,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.calendar_today, size: 48, color: Colors.grey),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Aucun rendez-vous suggéré',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: Colors.grey[600],
                         ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => AddRdvPage(
+                            name: 'Nom introuvable',
+                            tel: 'tel introuvable',
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.add),
+                    label: const Text('Ajouter un rendez-vous'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Theme.of(context).primaryColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
                       ),
-                    );
-                  },
-                  icon: const Icon(Icons.add),
-                  label: const Text('Ajouter un rendez-vous'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).primaryColor,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           );
         }
@@ -124,31 +150,39 @@ class _RdvSuggererState extends State<RdvSuggerer> {
               return bTimestamp.compareTo(aTimestamp);
             });
 
-            return ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: sortedDocuments.length,
-              itemBuilder: (context, index) {
-                final doc = sortedDocuments[index]['doc'];
-                final latestTimestamp = sortedDocuments[index]['latestTimestamp'];
-                final contactName = doc['contactName'] ?? 'Nom introuvable';
-                final tel = doc['tel'];
-                final data = doc.data() as Map<String, dynamic>;
-                final note = data['note'] as String? ?? '';
+            return FadeTransition(
+              opacity: _fadeAnimation,
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: sortedDocuments.length,
+                itemBuilder: (context, index) {
+                  final doc = sortedDocuments[index]['doc'];
+                  final latestTimestamp = sortedDocuments[index]['latestTimestamp'];
+                  final contactName = doc['contactName'] ?? 'Nom introuvable';
+                  final tel = doc['tel'];
+                  final data = doc.data() as Map<String, dynamic>;
+                  final note = data['note'] as String? ?? '';
 
-                return SuggestionCard(
-                  contactName: contactName,
-                  phoneNumber: tel,
-                  note: note,
-                  latestTimestamp: latestTimestamp != null
-                      ? DateTime.fromMillisecondsSinceEpoch(latestTimestamp)
-                      : null,
-                  onEdit: () => _editName(context, doc, contactName, tel),
-                  onSaveNote: (newNote) => _saveNote(doc.reference, newNote),
-                  onShowRecordings: () => _showRecordings(context, doc.reference),
-                  onAddAppointment: () => _addAppointment(context, contactName, tel),
-                  onDelete: () => _deleteDocument(context, doc, tel),
-                );
-              },
+                  return Hero(
+                    tag: 'suggestion_${doc.id}',
+                    child: Material(
+                      child: SuggestionCard(
+                        contactName: contactName,
+                        phoneNumber: tel,
+                        note: note,
+                        latestTimestamp: latestTimestamp != null
+                            ? DateTime.fromMillisecondsSinceEpoch(latestTimestamp)
+                            : null,
+                        onEdit: () => _editName(context, doc, contactName, tel),
+                        onSaveNote: (newNote) => _saveNote(doc.reference, newNote),
+                        onShowRecordings: () => _showRecordings(context, doc.reference),
+                        onAddAppointment: () => _addAppointment(context, contactName, tel),
+                        onDelete: () => _deleteDocument(context, doc, tel),
+                      ),
+                    ),
+                  );
+                },
+              ),
             );
           },
         );
