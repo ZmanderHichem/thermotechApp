@@ -13,298 +13,456 @@ class RdvSuggerer extends StatefulWidget {
 }
 
 class _RdvSuggererState extends State<RdvSuggerer> {
-  final CollectionReference _rdvSuggererCollection = FirebaseFirestore.instance.collection('rdv_suggerer');
+  final CollectionReference _rdvSuggererCollection =
+      FirebaseFirestore.instance.collection('rdv_suggerer');
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Rdv Suggerer'),
+    return StreamBuilder(
+      stream: _rdvSuggererCollection.snapshots(),
+      builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                const SizedBox(height: 16),
+                Text(
+                  'Une erreur est survenue',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.error.toString(),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final documents = snapshot.data!.docs;
+
+        if (documents.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.calendar_today, size: 48, color: Colors.grey),
+                const SizedBox(height: 16),
+                Text(
+                  'Aucun rendez-vous suggéré',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: Colors.grey[600],
+                      ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return FutureBuilder(
+          future: Future.wait(documents.map((doc) async {
+            final recordsSnapshot = await doc.reference
+                .collection('records')
+                .orderBy('timestamp', descending: true)
+                .get();
+            final latestTimestamp = recordsSnapshot.docs.isNotEmpty
+                ? recordsSnapshot.docs.first['timestamp']
+                : null;
+            return {
+              'doc': doc,
+              'latestTimestamp': latestTimestamp,
+            };
+          }).toList()),
+          builder: (context,
+              AsyncSnapshot<List<Map<String, dynamic>>> sortedSnapshot) {
+            if (sortedSnapshot.hasError) {
+              return Center(child: Text('Error: ${sortedSnapshot.error}'));
+            }
+
+            if (sortedSnapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final sortedDocuments = sortedSnapshot.data!..sort((a, b) {
+              final aTimestamp = a['latestTimestamp'];
+              final bTimestamp = b['latestTimestamp'];
+              if (aTimestamp == null && bTimestamp == null) return 0;
+              if (aTimestamp == null) return 1;
+              if (bTimestamp == null) return -1;
+              return bTimestamp.compareTo(aTimestamp);
+            });
+
+            return ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: sortedDocuments.length,
+              itemBuilder: (context, index) {
+                final doc = sortedDocuments[index]['doc'];
+                final latestTimestamp = sortedDocuments[index]['latestTimestamp'];
+                final contactName = doc['contactName'] ?? 'Nom introuvable';
+                final tel = doc['tel'];
+                final data = doc.data() as Map<String, dynamic>;
+                final note = data['note'] as String? ?? '';
+
+                return SuggestionCard(
+                  contactName: contactName,
+                  phoneNumber: tel,
+                  note: note,
+                  latestTimestamp: latestTimestamp != null
+                      ? DateTime.fromMillisecondsSinceEpoch(latestTimestamp)
+                      : null,
+                  onEdit: () => _editName(context, doc, contactName, tel),
+                  onSaveNote: (newNote) => _saveNote(doc.reference, newNote),
+                  onShowRecordings: () => _showRecordings(context, doc.reference),
+                  onAddAppointment: () => _addAppointment(context, contactName, tel),
+                  onDelete: () => _deleteDocument(context, doc, tel),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _editName(BuildContext context, DocumentSnapshot doc,
+      String currentName, String tel) async {
+    final nameController = TextEditingController(text: currentName);
+    return showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Modifier le nom'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(labelText: 'Nouveau nom'),
+        ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => AddRdvPage(name: 'Nom introuvable', tel: 'tel introuvable')),
-              );
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newName = nameController.text;
+              if (newName.isNotEmpty) {
+                try {
+                  await FirebaseFirestore.instance.runTransaction((transaction) async {
+                    transaction.update(doc.reference, {'contactName': newName});
+                    final clientSnapshot = await FirebaseFirestore.instance
+                        .collection('clients')
+                        .where('numero_telephone', isEqualTo: tel)
+                        .get();
+                    if (clientSnapshot.docs.isNotEmpty) {
+                      transaction.update(
+                          clientSnapshot.docs.first.reference, {'nom_client': newName});
+                    }
+                  });
+                  if (mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Nom modifié avec succès')),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Erreur: $e')),
+                    );
+                  }
+                }
+              }
             },
+            child: const Text('Enregistrer'),
           ),
         ],
       ),
-      body: StreamBuilder(
-        stream: _rdvSuggererCollection.snapshots(),
-        builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    );
+  }
 
-          final documents = snapshot.data!.docs;
+  Future<void> _saveNote(DocumentReference docRef, String note) async {
+    try {
+      await docRef.update({'note': note});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Note enregistrée')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: $e')),
+        );
+      }
+    }
+  }
 
-          return FutureBuilder(
-            future: Future.wait(documents.map((doc) async {
-              final recordsSnapshot = await doc.reference.collection('records').orderBy('timestamp', descending: true).get();
-              final latestTimestamp = recordsSnapshot.docs.isNotEmpty ? recordsSnapshot.docs.first['timestamp'] : null;
-              return {
-                'doc': doc,
-                'latestTimestamp': latestTimestamp,
-              };
-            }).toList()),
-            builder: (context, AsyncSnapshot<List<Map<String, dynamic>>> snapshot) {
-              if (snapshot.hasError) {
-                return Center(child: Text('Error: ${snapshot.error}'));
-              }
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
+  Future<void> _showRecordings(
+      BuildContext context, DocumentReference docRef) async {
+    final recordsSnapshot = await docRef.collection('records').get();
+    if (mounted) {
+      showModalBottomSheet(
+        context: context,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (context) => Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enregistrements',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: recordsSnapshot.docs.length,
+                  itemBuilder: (context, index) {
+                    final record = recordsSnapshot.docs[index];
+                    return AudioPlayerTile(
+                      url: record['url'],
+                      timestamp: DateTime.fromMillisecondsSinceEpoch(
+                          record['timestamp']),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
 
-              final sortedDocuments = snapshot.data!..sort((a, b) {
-                final aTimestamp = a['latestTimestamp'];
-                final bTimestamp = b['latestTimestamp'];
-                if (aTimestamp == null && bTimestamp == null) return 0;
-                if (aTimestamp == null) return 1;
-                if (bTimestamp == null) return -1;
-                return bTimestamp.compareTo(aTimestamp);
-              });
-
-              return ListView.builder(
-                itemCount: sortedDocuments.length,
-                itemBuilder: (context, index) {
-                  final doc = sortedDocuments[index]['doc'];
-                  final latestTimestamp = sortedDocuments[index]['latestTimestamp'];
-                  final contactName = doc['contactName'] ?? 'Nom introuvable';
-                  final tel = doc['tel'];
-                  final data = doc.data() as Map<String, dynamic>;
-                  final note = data.containsKey('note') ? data['note'] : '';
-
-                  TextEditingController noteController = TextEditingController(text: note);
-
-                  return Card(
-                    child: Column(
-                      children: [
-                        ListTile(
-                          title: Row(
-                            children: [
-                              Text(contactName),
-                              IconButton(
-                                icon: const Icon(Icons.edit),
-                                onPressed: () {
-                                  TextEditingController nameController = TextEditingController(text: contactName);
-                                  showDialog(
-                                    context: context,
-                                    builder: (context) {
-                                      return AlertDialog(
-                                        title: const Text('Modifier le nom'),
-                                        content: TextField(
-                                          controller: nameController,
-                                          decoration: const InputDecoration(labelText: 'Nouveau nom'),
-                                        ),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () {
-                                              Navigator.of(context).pop();
-                                            },
-                                            child: const Text('Annuler'),
-                                          ),
-                                          ElevatedButton(
-                                            onPressed: () {
-                                              String newName = nameController.text;
-                                              if (newName.isNotEmpty) {
-                                                FirebaseFirestore.instance.runTransaction((transaction) async {
-                                                  DocumentSnapshot freshSnap = await transaction.get(doc.reference);
-                                                  transaction.update(freshSnap.reference, {'contactName': newName});
-                                                  QuerySnapshot clientSnapshot = await FirebaseFirestore.instance
-                                                      .collection('clients')
-                                                      .where('numero_telephone', isEqualTo: tel)
-                                                      .get();
-                                                  if (clientSnapshot.docs.isNotEmpty) {
-                                                    DocumentSnapshot clientDoc = clientSnapshot.docs.first;
-                                                    transaction.update(clientDoc.reference, {'nom_client': newName});
-                                                  }
-                                                }).then((_) {
-                                                  Navigator.of(context).pop();
-                                                });
-                                              }
-                                            },
-                                            child: const Text('Valider'),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              GestureDetector(
-                                onTap: () {
-                                  Clipboard.setData(ClipboardData(text: tel));
-                                },
-                                child: Text(tel),
-                              ),
-                              if (latestTimestamp != null)
-                                Text('Dernier enregistrement: ${DateTime.fromMillisecondsSinceEpoch(latestTimestamp).toString()}'),
-                              TextField(
-                                controller: noteController,
-                                decoration: const InputDecoration(labelText: 'Note'),
-                              ),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-                                onPressed: () {
-                                  String note = noteController.text;
-                                  if (note.isNotEmpty) {
-                                    FirebaseFirestore.instance.runTransaction((transaction) async {
-                                      DocumentSnapshot freshSnap = await transaction.get(doc.reference);
-                                      transaction.update(freshSnap.reference, {'note': note});
-                                    });
-                                  }
-                                },
-                                child: const Text('Enregistrer Note',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.audiotrack),
-                            onPressed: () {
-                              showModalBottomSheet(
-                                context: context,
-                                builder: (context) {
-                                  return FutureBuilder(
-                                    future: doc.reference.collection('records').get(),
-                                    builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
-                                      if (snapshot.hasError) {
-                                        return Center(child: Text('Error: ${snapshot.error}'));
-                                      }
-                                      if (snapshot.connectionState == ConnectionState.waiting) {
-                                        return const Center(child: CircularProgressIndicator());
-                                      }
-
-                                      final records = snapshot.data!.docs;
-
-                                      return ListView.builder(
-                                        itemCount: records.length,
-                                        itemBuilder: (context, index) {
-                                          final record = records[index];
-
-                                          return AudioPlayerTile(
-                                            url: record['url'],
-                                            timestamp: DateTime.fromMillisecondsSinceEpoch(record['timestamp']),
-                                          );
-                                        },
-                                      );
-                                    },
-                                  );
-                                },
-                              );
-                            },
-                          ),
-                        ),
-                        OverflowBar(
-                          children: [
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => AddRdvPage(
-                                      name: contactName,
-                                      tel: tel,
-                                    ),
-                                  ),
-                                );
-                              },
-                              child: const Text(
-                                'Ajouter',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                              onPressed: () async {
-                                bool confirmDelete = await showDialog(
-                                  context: context,
-                                  builder: (BuildContext context) {
-                                    return AlertDialog(
-                                      title: const Text('Confirm Deletion'),
-                                      content: const Text('Are you sure you want to delete this item?'),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () {
-                                            Navigator.of(context).pop(false);
-                                          },
-                                          child: const Text('Cancel'),
-                                        ),
-                                        TextButton(
-                                          style: TextButton.styleFrom(
-                                            backgroundColor: Colors.red,
-                                          ),
-                                          onPressed: () {
-                                            Navigator.of(context).pop(true);
-                                          },
-                                          child: const  Text('Supprimer',
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                );
-
-                                if (confirmDelete) {
-                                  final querySnapshot = await FirebaseFirestore.instance
-                                      .collection('rdv_suggerer')
-                                      .where('tel', isEqualTo: doc['tel'])
-                                      .get();
-                                  for (var document in querySnapshot.docs) {
-                                    // Fetch records subcollection
-                                    final recordsSnapshot = await document.reference.collection('records').get();
-                                    for (var record in recordsSnapshot.docs) {
-                                      // Delete audio file from storage
-                                      await FirebaseStorage.instance.refFromURL(record['url']).delete();
-                                      // Delete record document
-                                      await record.reference.delete();
-                                    }
-                                    // Delete main document
-                                    await document.reference.delete();
-                                  }
-                                }
-                              },
-                              child: const Text('Suprimer',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              );
-            },
-          );
-        },
+  void _addAppointment(BuildContext context, String name, String tel) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddRdvPage(name: name, tel: tel),
       ),
     );
+  }
+
+  Future<void> _deleteDocument(
+      BuildContext context, DocumentSnapshot doc, String tel) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirmer la suppression'),
+        content: const Text('Voulez-vous vraiment supprimer ce rendez-vous ?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final querySnapshot = await FirebaseFirestore.instance
+            .collection('rdv_suggerer')
+            .where('tel', isEqualTo: tel)
+            .get();
+
+        for (var document in querySnapshot.docs) {
+          final recordsSnapshot =
+              await document.reference.collection('records').get();
+          for (var record in recordsSnapshot.docs) {
+            await FirebaseStorage.instance.refFromURL(record['url']).delete();
+            await record.reference.delete();
+          }
+          await document.reference.delete();
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Rendez-vous supprimé')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Erreur: $e')),
+          );
+        }
+      }
+    }
+  }
+}
+
+class SuggestionCard extends StatelessWidget {
+  final String contactName;
+  final String phoneNumber;
+  final String note;
+  final DateTime? latestTimestamp;
+  final VoidCallback onEdit;
+  final Function(String) onSaveNote;
+  final VoidCallback onShowRecordings;
+  final VoidCallback onAddAppointment;
+  final VoidCallback onDelete;
+
+  const SuggestionCard({
+    super.key,
+    required this.contactName,
+    required this.phoneNumber,
+    required this.note,
+    required this.latestTimestamp,
+    required this.onEdit,
+    required this.onSaveNote,
+    required this.onShowRecordings,
+    required this.onAddAppointment,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final noteController = TextEditingController(text: note);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            title: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    contactName,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.edit),
+                  onPressed: onEdit,
+                  tooltip: 'Modifier le nom',
+                ),
+              ],
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                InkWell(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: phoneNumber));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Numéro copié dans le presse-papier'),
+                      ),
+                    );
+                  },
+                  child: Row(
+                    children: [
+                      const Icon(Icons.phone, size: 16),
+                      const SizedBox(width: 8),
+                      Text(phoneNumber),
+                    ],
+                  ),
+                ),
+                if (latestTimestamp != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.access_time, size: 16),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Dernier enregistrement: ${_formatDate(latestTimestamp!)}',
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: noteController,
+              decoration: const InputDecoration(
+                labelText: 'Note',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 2,
+            ),
+          ),
+          ButtonBar(
+            alignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.save),
+                label: const Text('Enregistrer'),
+                onPressed: () => onSaveNote(noteController.text),
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.mic),
+                label: const Text('Écouter'),
+                onPressed: onShowRecordings,
+              ),
+            ],
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('Ajouter RDV'),
+                    onPressed: onAddAppointment,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.delete),
+                    label: const Text('Supprimer'),
+                    onPressed: onDelete,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
   }
 }
