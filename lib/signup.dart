@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:saadoun/auth.dart';
 import 'package:saadoun/signin.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class SignUp extends StatefulWidget {
   const SignUp({super.key});
@@ -13,287 +12,243 @@ class SignUp extends StatefulWidget {
 }
 
 class _SignUpState extends State<SignUp> {
-  final List<String> _choices = ['nuit', 'jour'];
-  late final String? _selectedChoice = "jour";
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
 
-  late String? _eemail = ""; //
-  late String? _uuserName = ""; //
-  late String? _Tel = "";
-  late String? _MDP = "";
-  late String? _MDP2 = "";
-
-  String? errorMessage = "";
-  bool PassCorrect = false;
-  final TextEditingController _controllerEmail = TextEditingController();
-
-  final TextEditingController _controllerPassword = TextEditingController();
-  Future<String?> getFromLocalStorage(String key) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    return prefs.getString(key);
-  }
-
-  Future<void> addUserDataToFirestore() async {
-    try {
-      // Get the current authenticated user
-      User? user = FirebaseAuth.instance.currentUser;
-      print("user : $user");
-      if (user != null) {
-        // Reference to the user's document in the 'users' collection
-        DocumentReference userDocRef =
-            FirebaseFirestore.instance.collection('users').doc(user.uid);
-
-        // Define user data to be stored in Firestore
-        Map<String, dynamic> userData = {
-          'UserName': _uuserName,
-          'Email': _eemail,
-          'Tel': _Tel,
-          'Password': _MDP2,
-          'MatType': _selectedChoice,
-          // Add other user-related fields as needed
-        };
-        print('User data : $userData');
-        // Set the data in Firestore
-        await userDocRef
-            .set(userData)
-            .then((value) => {
-                  userData = {},
-                  print('User data added to Firestore for UID: ${user.uid}')
-                })
-            .then((value) => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => SignIn()),
-                ));
-
-        print('User data added to Firestore for UID: ${user.uid}');
-      } else {
-        print('User is not signed in');
-      }
-    } catch (e) {
-      print("probleme: ${e.toString()}");
-    }
-  }
-
-  Future<void> createUserwithEmailAndPassword() async {
-    try {
-      await Auth().createUserWithEmailAndPassword(
-        email: _controllerEmail.text,
-        password: _controllerPassword.text,
-      );
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        errorMessage = e.message;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Padding(
-              padding: const EdgeInsets.only(bottom: 10), // Add bottom margin here
-              child: Text(
-                errorMessage!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ), // Change font size here
-              ),
-            ),
-            backgroundColor: const Color.fromARGB(
-                255, 207, 62, 52), // Change background color here
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30), // Change shape here
-            ),
-          ),
-        );
-        print("errrrrror : $errorMessage");
-      });
-    }
-  }
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
+  bool _isLoading = false;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
     Auth().signOut();
-    print("object");
+  }
+
+  Future<void> _createAccount() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      await Auth().createUserWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+
+      await _addUserDataToFirestore();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Compte créé avec succès !',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16),
+            ),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const SignIn()),
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() => _errorMessage = e.message);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.message ?? 'Une erreur est survenue',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 16),
+          ),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _addUserDataToFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'UserName': _nameController.text,
+        'Email': _emailController.text,
+        'Tel': _phoneController.text,
+        'Password': _passwordController.text,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('Créer un compte'),
+      ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.only(left: 20.0, right: 20.0),
-          child: SingleChildScrollView(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Form(
+            key: _formKey,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back),
+                TextFormField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Nom complet',
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez entrer votre nom';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon: Icon(Icons.email_outlined),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez entrer votre email';
+                    }
+                    if (!value.contains('@')) {
+                      return 'Veuillez entrer un email valide';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Téléphone',
+                    prefixIcon: Icon(Icons.phone_outlined),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez entrer votre numéro de téléphone';
+                    }
+                    if (value.length < 8) {
+                      return 'Numéro de téléphone invalide';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _passwordController,
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
+                    labelText: 'Mot de passe',
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
                       onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => SignIn()),
-                        );
+                        setState(() => _obscurePassword = !_obscurePassword);
                       },
                     ),
-                    const Text(
-                      'Register Account',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 40),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                const SizedBox(height: 20),
-                TextField(
-                  onChanged: (String? uuserName) {
-                    setState(() {
-                      _uuserName = uuserName!;
-                    });
-                    print('user Name: $uuserName');
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Full Name',
-                    icon: Icon(Icons.person),
                   ),
-                ),
-                const SizedBox(height: 20),
-                TextField(
-                  controller: _controllerEmail,
-                  keyboardType: TextInputType.emailAddress,
-                  onChanged: (String? eemail) {
-                    setState(() {
-                      _eemail = eemail!;
-                    });
-                    print('email: $eemail');
-                    print('controller: $_controllerEmail.text ');
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Votre Email',
-                    icon: Icon(Icons.email),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                
-                TextField(
-                  onChanged: (String? Tel) {
-                    setState(() {
-                      _Tel = Tel!;
-                    });
-                    print('email: $Tel');
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'TEL',
-                    icon: Icon(Icons.phone),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                TextField(
-                  onChanged: (String? MDP) {
-                    setState(() {
-                      _MDP = MDP!;
-                    });
-                    print('email: $MDP');
-                  },
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    icon: Icon(Icons.lock),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                TextField(
-                  obscureText: true,
-                  controller: _controllerPassword,
-                  onChanged: (String? MDP2) {
-                    setState(() {
-                      if (MDP2 == _MDP) {
-                        _MDP2 = MDP2!;
-                        PassCorrect = true;
-                      } else {
-                        PassCorrect = false;
-                      }
-                    });
-                    print('email: $MDP2');
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Confirm Password',
-                    icon: Icon(Icons.lock),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: () {
-                    print('error: $errorMessage');
-
-                    if (PassCorrect == true) {
-                      print("D5all");
-                      createUserwithEmailAndPassword().then((value) =>
-                          {addUserDataToFirestore(), print("TLA3333")});
-                      Auth().signOut();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Padding(
-                            padding: EdgeInsets.only(
-                                bottom: 10), // Add bottom margin here
-                            child: Text(
-                              "compte créée",
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ), // Change font size here
-                            ),
-                          ),
-                          backgroundColor: const Color.fromARGB(
-                              255, 0, 184, 3), // Change background color here
-                          shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(30), // Change shape here
-                          ),
-                        ),
-                      );
-                      /*FirebaseAuth.instance.authStateChanges().listen((User? user) {
-  if (user != null) {
-    // User is signed in
-    print("addUserDataToFirestore");
-  } else {
-    // User is signed out
-    print('User is signed out');
-  }
-}
-);*/
-
-                      PassCorrect = false;
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Padding(
-                            padding: EdgeInsets.only(
-                                bottom: 10), // Add bottom margin here
-                            child: Text(
-                              "wrong password",
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ), // Change font size here
-                            ),
-                          ),
-                          backgroundColor: const Color.fromARGB(
-                              255, 207, 62, 52), // Change background color here
-                          shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(30), // Change shape here
-                          ),
-                        ),
-                      );
-                      print("rodha toast:wrong password");
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez entrer un mot de passe';
                     }
+                    if (value.length < 6) {
+                      return 'Le mot de passe doit contenir au moins 6 caractères';
+                    }
+                    return null;
                   },
-                  child: const Text('CONTINUE'),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _confirmPasswordController,
+                  obscureText: _obscureConfirmPassword,
+                  decoration: InputDecoration(
+                    labelText: 'Confirmer le mot de passe',
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscureConfirmPassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () {
+                        setState(() =>
+                            _obscureConfirmPassword = !_obscureConfirmPassword);
+                      },
+                    ),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez confirmer votre mot de passe';
+                    }
+                    if (value != _passwordController.text) {
+                      return 'Les mots de passe ne correspondent pas';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _createAccount,
+                  child: _isLoading
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text('Créer un compte'),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Déjà un compte ?',
+                      style: Theme.of(context).textTheme.bodyLarge,
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(builder: (context) => const SignIn()),
+                        );
+                      },
+                      child: const Text('Se connecter'),
+                    ),
+                  ],
                 ),
               ],
             ),
