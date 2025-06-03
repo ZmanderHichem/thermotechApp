@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:camera/camera.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
 
@@ -16,7 +17,7 @@ class AdminDashboard extends StatefulWidget {
   _AdminDashboardState createState() => _AdminDashboardState();
 }
 
-class _AdminDashboardState extends State<AdminDashboard> {
+class _AdminDashboardState extends State<AdminDashboard> with WidgetsBindingObserver {
   final GlobalKey _qrKey = GlobalKey(debugLabel: 'QR');
   QRViewController? _qrController;
   bool _isProcessing = false;
@@ -24,28 +25,80 @@ class _AdminDashboardState extends State<AdminDashboard> {
   final FirebaseStorage _storage = FirebaseStorage.instance;
   List<CameraDescription>? _cameras;
   bool _hasImages = false;
+  bool _isFlashOn = false;
+  double _zoomLevel = 1.0;
+  final double _minZoom = 1.0;
+  final double _maxZoom = 5.0;
+  bool _isCameraInitialized = false;
+  CameraController? _cameraController;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeCamera();
+  }
+
+  @override
+  void dispose() {
+    _qrController?.dispose();
+    _cameraController?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _initializeCamera();
+    }
   }
 
   Future<void> _initializeCamera() async {
     _cameras = await availableCameras();
+    setState(() => _isCameraInitialized = true);
   }
 
   Future<void> _checkForImages(String qrCode) async {
     try {
       final ref = _storage.ref().child('repair_images/$qrCode');
       final result = await ref.listAll();
-      setState(() {
-        _hasImages = result.items.isNotEmpty;
-      });
+      setState(() => _hasImages = result.items.isNotEmpty);
     } catch (e) {
-      setState(() {
-        _hasImages = false;
+      setState(() => _hasImages = false);
+    }
+  }
+
+  Future<void> _pickImage(BuildContext context, String qrCode) async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+      
+      if (image == null) return;
+
+      final file = File(image.path);
+      final fileName = path.basename(file.path);
+      final storageRef = _storage.ref().child('repair_images/$qrCode/$fileName');
+      
+      await storageRef.putFile(file);
+      final imageUrl = await storageRef.getDownloadURL();
+      
+      await _firestore.collection('Qr-codes').doc(qrCode).update({
+        'images': FieldValue.arrayUnion([imageUrl])
       });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo importée avec succès')),
+        );
+        await _checkForImages(qrCode);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: ${e.toString()}')),
+        );
+      }
     }
   }
 
@@ -58,73 +111,145 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
 
     final camera = _cameras!.first;
-    final controller = CameraController(camera, ResolutionPreset.medium);
-    
+    _cameraController = CameraController(
+      camera,
+      ResolutionPreset.max,
+      enableAudio: false,
+    );
+
     try {
-      await controller.initialize();
+      await _cameraController!.initialize();
       
       if (!mounted) return;
 
-      // Afficher la caméra en mode prévisualisation
       await showDialog(
         context: context,
         builder: (context) => StatefulBuilder(
           builder: (context, setState) {
-            return AlertDialog(
-              contentPadding: EdgeInsets.zero,
-              content: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.9,
-                height: MediaQuery.of(context).size.height * 0.7,
-                child: Stack(
-                  children: [
-                    CameraPreview(controller),
-                    Positioned(
-                      bottom: 20,
-                      left: 0,
-                      right: 0,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.camera_alt, color: Colors.white),
-                            onPressed: () async {
-                              final image = await controller.takePicture();
-                              await controller.dispose();
-                              Navigator.pop(context);
-
-                              // Sauvegarder l'image dans Firebase Storage
-                              final file = File(image.path);
-                              final fileName = path.basename(file.path);
-                              final storageRef = _storage.ref().child('repair_images/$qrCode/$fileName');
-                              
-                              await storageRef.putFile(file);
-                              
-                              // Mettre à jour Firestore avec la référence de l'image
-                              final imageUrl = await storageRef.getDownloadURL();
-                              
-                              await _firestore.collection('Qr-codes').doc(qrCode).update({
-                                'images': FieldValue.arrayUnion([imageUrl])
-                              });
-
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Photo enregistrée avec succès')),
-                                );
-                                
-                                // Vérifier si des images existent maintenant
-                                await _checkForImages(qrCode);
-                              }
-                            },
-                          ),
-                        ],
+            return Dialog(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox(
+                        width: MediaQuery.of(context).size.width,
+                        height: MediaQuery.of(context).size.width,
+                        child: CameraPreview(_cameraController!),
                       ),
-                    ),
-                  ],
-                ),
+                      Positioned(
+                        top: 16,
+                        right: 16,
+                        child: Row(
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                _isFlashOn ? Icons.flash_on : Icons.flash_off,
+                                color: Colors.white,
+                              ),
+                              onPressed: () async {
+                                setState(() => _isFlashOn = !_isFlashOn);
+                                await _cameraController!.setFlashMode(
+                                  _isFlashOn ? FlashMode.torch : FlashMode.off,
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: const Icon(Icons.flip_camera_ios, color: Colors.white),
+                              onPressed: () async {
+                                final newCamera = _cameras!.firstWhere(
+                                  (camera) => camera.lensDirection != 
+                                    _cameraController!.description.lensDirection,
+                                );
+                                await _cameraController!.dispose();
+                                _cameraController = CameraController(
+                                  newCamera,
+                                  ResolutionPreset.max,
+                                  enableAudio: false,
+                                );
+                                await _cameraController!.initialize();
+                                setState(() {});
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 16,
+                        left: 0,
+                        right: 0,
+                        child: Column(
+                          children: [
+                            Slider(
+                              value: _zoomLevel,
+                              min: _minZoom,
+                              max: _maxZoom,
+                              onChanged: (value) async {
+                                setState(() => _zoomLevel = value);
+                                await _cameraController!.setZoomLevel(value);
+                              },
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.close, color: Colors.white),
+                                  onPressed: () => Navigator.pop(context),
+                                ),
+                                FloatingActionButton(
+                                  heroTag: 'takePhoto',
+                                  onPressed: () async {
+                                    try {
+                                      final image = await _cameraController!.takePicture();
+                                      final file = File(image.path);
+                                      final fileName = path.basename(file.path);
+                                      final storageRef = _storage.ref()
+                                        .child('repair_images/$qrCode/$fileName');
+                                      
+                                      await storageRef.putFile(file);
+                                      final imageUrl = await storageRef.getDownloadURL();
+                                      
+                                      await _firestore.collection('Qr-codes')
+                                        .doc(qrCode).update({
+                                          'images': FieldValue.arrayUnion([imageUrl])
+                                        });
+
+                                      if (mounted) {
+                                        Navigator.pop(context);
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text('Photo enregistrée avec succès'),
+                                          ),
+                                        );
+                                        await _checkForImages(qrCode);
+                                      }
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Erreur: ${e.toString()}'),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: const Icon(Icons.camera),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.photo_library, color: Colors.white),
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _pickImage(context, qrCode);
+                                  },
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             );
           },
@@ -134,6 +259,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erreur: ${e.toString()}')),
       );
+    } finally {
+      await _cameraController?.dispose();
     }
   }
 
@@ -157,30 +284,54 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
       showDialog(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Photos de la réparation'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: imageUrls.length,
-              itemBuilder: (context, index) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Image.network(
-                    imageUrls[index],
-                    fit: BoxFit.cover,
+        builder: (context) => Dialog(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AppBar(
+                title: const Text('Photos de la réparation'),
+                automaticallyImplyLeading: false,
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
                   ),
-                );
-              },
-            ),
+                ],
+              ),
+              Expanded(
+                child: GridView.builder(
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                  ),
+                  itemCount: imageUrls.length,
+                  itemBuilder: (context, index) {
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ImageViewerPage(
+                              imageUrl: imageUrls[index],
+                            ),
+                          ),
+                        );
+                      },
+                      child: Hero(
+                        tag: imageUrls[index],
+                        child: Image.network(
+                          imageUrls[index],
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Fermer'),
-            ),
-          ],
         ),
       );
     } catch (e) {
@@ -191,9 +342,39 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   @override
-  void dispose() {
-    _qrController?.dispose();
-    super.dispose();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          QRView(
+            key: _qrKey,
+            onQRViewCreated: _onQRViewCreated,
+            overlay: QrScannerOverlayShape(
+              borderColor: Theme.of(context).primaryColor,
+              borderRadius: 10,
+              borderLength: 30,
+              borderWidth: 10,
+              cutOutSize: 300,
+            ),
+          ),
+          if (_isProcessing)
+            Container(
+              color: Colors.black45,
+              child: const Center(
+                child: CircularProgressIndicator(),
+              ),
+            ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16,
+            left: 16,
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _onQRViewCreated(QRViewController controller) {
@@ -712,7 +893,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
                               await batch.commit();
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Réparation mise à jour avec succès!')),
+                                const Snack
+Bar(content: Text('Réparation mise à jour avec succès!')),
                               );
                             },
                             tooltip: 'Enregistrer la réparation',
@@ -1101,75 +1283,30 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ),
     );
   }
+}
+
+class ImageViewerPage extends StatelessWidget {
+  final String imageUrl;
+
+  const ImageViewerPage({super.key, required this.imageUrl});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text("Tableau de Bord Atelier"),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.history),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => Scaffold(
-                    appBar:
-                        AppBar(title: const Text('Historique des Réparations')),
-                    body: StreamBuilder(
-                      stream: _firestore
-                          .collectionGroup('historique')
-                          .orderBy('date_sortie', descending: true)
-                          .snapshots(),
-                      builder: (context, snapshot) {
-                        if (!snapshot.hasData) {
-                          return const Center(
-                              child: CircularProgressIndicator());
-                        }
-                        return ListView.builder(
-                          itemCount: snapshot.data!.docs.length,
-                          itemBuilder: (context, index) {
-                            final doc = snapshot.data!.docs[index];
-                            final data = doc.data() as Map<String, dynamic>;
-                            return Card(
-                              margin: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
-                              child: ListTile(
-                                title: Text(data['nom_client']),
-                                subtitle: Text(
-                                    '${data['type_machine']} - ${DateFormat('dd/MM/yyyy').format((data['date_sortie'] as Timestamp).toDate())}'),
-                                trailing: const Icon(Icons.chevron_right),
-                                onTap: () => _showRepairDetails(doc),
-                              ),
-                            );
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
+        backgroundColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: Stack(
-        children: [
-          QRView(
-            key: _qrKey,
-            onQRViewCreated: _onQRViewCreated,
-            overlay: QrScannerOverlayShape(
-              borderColor: Colors.red,
-              borderRadius: 10,
-              borderLength: 30,
-              borderWidth: 10,
-              cutOutSize: 300,
-            ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 4.0,
+          child: Hero(
+            tag: imageUrl,
+            child: Image.network(imageUrl),
           ),
-          if (_isProcessing) const Center(child: CircularProgressIndicator()),
-        ],
+        ),
       ),
     );
   }
