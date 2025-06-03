@@ -7,8 +7,9 @@ import 'package:camera/camera.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
+import 'package:photo_view/photo_view.dart';
 import 'package:path/path.dart' as path;
+import 'dart:io';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -21,16 +22,14 @@ class _AdminDashboardState extends State<AdminDashboard> with WidgetsBindingObse
   final GlobalKey _qrKey = GlobalKey(debugLabel: 'QR');
   QRViewController? _qrController;
   bool _isProcessing = false;
+  bool _hasImages = false;
+  bool _isFlashOn = false;
+  double _zoomLevel = 0.0;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
   List<CameraDescription>? _cameras;
-  bool _hasImages = false;
-  bool _isFlashOn = false;
-  double _zoomLevel = 1.0;
-  final double _minZoom = 1.0;
-  final double _maxZoom = 5.0;
-  bool _isCameraInitialized = false;
   CameraController? _cameraController;
+  int _selectedCameraIndex = 0;
 
   @override
   void initState() {
@@ -41,22 +40,82 @@ class _AdminDashboardState extends State<AdminDashboard> with WidgetsBindingObse
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _qrController?.dispose();
     _cameraController?.dispose();
-    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _initializeCamera();
+      _qrController?.resumeCamera();
+    } else {
+      _qrController?.pauseCamera();
     }
   }
 
   Future<void> _initializeCamera() async {
-    _cameras = await availableCameras();
-    setState(() => _isCameraInitialized = true);
+    try {
+      _cameras = await availableCameras();
+      if (_cameras != null && _cameras!.isNotEmpty) {
+        await _initializeCameraController(_cameras![0]);
+      }
+    } catch (e) {
+      debugPrint('Error initializing camera: $e');
+    }
+  }
+
+  Future<void> _initializeCameraController(CameraDescription camera) async {
+    if (_cameraController != null) {
+      await _cameraController!.dispose();
+    }
+
+    _cameraController = CameraController(
+      camera,
+      ResolutionPreset.max,
+      enableAudio: false,
+    );
+
+    try {
+      await _cameraController!.initialize();
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('Error initializing camera controller: $e');
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    if (_cameras == null || _cameras!.isEmpty) return;
+
+    _selectedCameraIndex = (_selectedCameraIndex + 1) % _cameras!.length;
+    await _initializeCameraController(_cameras![_selectedCameraIndex]);
+  }
+
+  Future<void> _toggleFlash() async {
+    try {
+      if (_cameraController != null) {
+        if (_isFlashOn) {
+          await _cameraController!.setFlashMode(FlashMode.off);
+        } else {
+          await _cameraController!.setFlashMode(FlashMode.torch);
+        }
+        setState(() => _isFlashOn = !_isFlashOn);
+      }
+    } catch (e) {
+      debugPrint('Error toggling flash: $e');
+    }
+  }
+
+  Future<void> _setZoomLevel(double value) async {
+    try {
+      if (_cameraController != null) {
+        await _cameraController!.setZoomLevel(value);
+        setState(() => _zoomLevel = value);
+      }
+    } catch (e) {
+      debugPrint('Error setting zoom level: $e');
+    }
   }
 
   Future<void> _checkForImages(String qrCode) async {
@@ -69,29 +128,33 @@ class _AdminDashboardState extends State<AdminDashboard> with WidgetsBindingObse
     }
   }
 
-  Future<void> _pickImage(BuildContext context, String qrCode) async {
-    try {
-      final ImagePicker picker = ImagePicker();
-      final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-      
-      if (image == null) return;
+  Future<void> _pickImage(String qrCode) async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+    
+    if (image != null) {
+      await _saveImage(File(image.path), qrCode);
+    }
+  }
 
-      final file = File(image.path);
-      final fileName = path.basename(file.path);
-      final storageRef = _storage.ref().child('repair_images/$qrCode/$fileName');
+  Future<void> _saveImage(File imageFile, String qrCode) async {
+    try {
+      final fileName = path.basename(imageFile.path);
+      final ref = _storage.ref().child('repair_images/$qrCode/$fileName');
       
-      await storageRef.putFile(file);
-      final imageUrl = await storageRef.getDownloadURL();
+      await ref.putFile(imageFile);
+      final imageUrl = await ref.getDownloadURL();
       
       await _firestore.collection('Qr-codes').doc(qrCode).update({
         'images': FieldValue.arrayUnion([imageUrl])
       });
 
+      await _checkForImages(qrCode);
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Photo importée avec succès')),
+          const SnackBar(content: Text('Image enregistrée avec succès')),
         );
-        await _checkForImages(qrCode);
       }
     } catch (e) {
       if (mounted) {
@@ -102,177 +165,17 @@ class _AdminDashboardState extends State<AdminDashboard> with WidgetsBindingObse
     }
   }
 
-  Future<void> _takePicture(BuildContext context, String qrCode) async {
-    if (_cameras == null || _cameras!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Aucune caméra disponible')),
-      );
-      return;
-    }
-
-    final camera = _cameras!.first;
-    _cameraController = CameraController(
-      camera,
-      ResolutionPreset.max,
-      enableAudio: false,
-    );
-
-    try {
-      await _cameraController!.initialize();
-      
-      if (!mounted) return;
-
-      await showDialog(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, setState) {
-            return Dialog(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      SizedBox(
-                        width: MediaQuery.of(context).size.width,
-                        height: MediaQuery.of(context).size.width,
-                        child: CameraPreview(_cameraController!),
-                      ),
-                      Positioned(
-                        top: 16,
-                        right: 16,
-                        child: Row(
-                          children: [
-                            IconButton(
-                              icon: Icon(
-                                _isFlashOn ? Icons.flash_on : Icons.flash_off,
-                                color: Colors.white,
-                              ),
-                              onPressed: () async {
-                                setState(() => _isFlashOn = !_isFlashOn);
-                                await _cameraController!.setFlashMode(
-                                  _isFlashOn ? FlashMode.torch : FlashMode.off,
-                                );
-                              },
-                            ),
-                            const SizedBox(width: 8),
-                            IconButton(
-                              icon: const Icon(Icons.flip_camera_ios, color: Colors.white),
-                              onPressed: () async {
-                                final newCamera = _cameras!.firstWhere(
-                                  (camera) => camera.lensDirection != 
-                                    _cameraController!.description.lensDirection,
-                                );
-                                await _cameraController!.dispose();
-                                _cameraController = CameraController(
-                                  newCamera,
-                                  ResolutionPreset.max,
-                                  enableAudio: false,
-                                );
-                                await _cameraController!.initialize();
-                                setState(() {});
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                      Positioned(
-                        bottom: 16,
-                        left: 0,
-                        right: 0,
-                        child: Column(
-                          children: [
-                            Slider(
-                              value: _zoomLevel,
-                              min: _minZoom,
-                              max: _maxZoom,
-                              onChanged: (value) async {
-                                setState(() => _zoomLevel = value);
-                                await _cameraController!.setZoomLevel(value);
-                              },
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.close, color: Colors.white),
-                                  onPressed: () => Navigator.pop(context),
-                                ),
-                                FloatingActionButton(
-                                  heroTag: 'takePhoto',
-                                  onPressed: () async {
-                                    try {
-                                      final image = await _cameraController!.takePicture();
-                                      final file = File(image.path);
-                                      final fileName = path.basename(file.path);
-                                      final storageRef = _storage.ref()
-                                        .child('repair_images/$qrCode/$fileName');
-                                      
-                                      await storageRef.putFile(file);
-                                      final imageUrl = await storageRef.getDownloadURL();
-                                      
-                                      await _firestore.collection('Qr-codes')
-                                        .doc(qrCode).update({
-                                          'images': FieldValue.arrayUnion([imageUrl])
-                                        });
-
-                                      if (mounted) {
-                                        Navigator.pop(context);
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(
-                                            content: Text('Photo enregistrée avec succès'),
-                                          ),
-                                        );
-                                        await _checkForImages(qrCode);
-                                      }
-                                    } catch (e) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text('Erreur: ${e.toString()}'),
-                                        ),
-                                      );
-                                    }
-                                  },
-                                  child: const Icon(Icons.camera),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.photo_library, color: Colors.white),
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _pickImage(context, qrCode);
-                                  },
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur: ${e.toString()}')),
-      );
-    } finally {
-      await _cameraController?.dispose();
-    }
-  }
-
-  Future<void> _showImages(BuildContext context, String qrCode) async {
+  Future<void> _showImages(String qrCode) async {
     try {
       final ref = _storage.ref().child('repair_images/$qrCode');
       final result = await ref.listAll();
       
       if (result.items.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Aucune image disponible')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Aucune image disponible')),
+          );
+        }
         return;
       }
 
@@ -282,99 +185,97 @@ class _AdminDashboardState extends State<AdminDashboard> with WidgetsBindingObse
 
       if (!mounted) return;
 
-      showDialog(
+      await showDialog(
         context: context,
         builder: (context) => Dialog(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AppBar(
-                title: const Text('Photos de la réparation'),
-                automaticallyImplyLeading: false,
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              Expanded(
-                child: GridView.builder(
-                  padding: const EdgeInsets.all(8),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 8,
-                    mainAxisSpacing: 8,
-                  ),
-                  itemCount: imageUrls.length,
-                  itemBuilder: (context, index) {
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => ImageViewerPage(
-                              imageUrl: imageUrls[index],
-                            ),
-                          ),
-                        );
-                      },
-                      child: Hero(
-                        tag: imageUrls[index],
-                        child: Image.network(
-                          imageUrls[index],
-                          fit: BoxFit.cover,
+          backgroundColor: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      const Text(
+                        'Photos de la réparation',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                    );
-                  },
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                const Divider(height: 1),
+                Flexible(
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.all(16),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
+                    ),
+                    itemCount: imageUrls.length,
+                    itemBuilder: (context, index) {
+                      return GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => Scaffold(
+                                backgroundColor: Colors.black,
+                                appBar: AppBar(
+                                  backgroundColor: Colors.black,
+                                  foregroundColor: Colors.white,
+                                ),
+                                body: PhotoView(
+                                  imageProvider: NetworkImage(imageUrls[index]),
+                                  minScale: PhotoViewComputedScale.contained,
+                                  maxScale: PhotoViewComputedScale.covered * 2,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                        child: Hero(
+                          tag: imageUrls[index],
+                          child: Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(8),
+                              image: DecorationImage(
+                                image: NetworkImage(imageUrls[index]),
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur: ${e.toString()}')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: ${e.toString()}')),
+        );
+      }
     }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          QRView(
-            key: _qrKey,
-            onQRViewCreated: _onQRViewCreated,
-            overlay: QrScannerOverlayShape(
-              borderColor: Theme.of(context).primaryColor,
-              borderRadius: 10,
-              borderLength: 30,
-              borderWidth: 10,
-              cutOutSize: 300,
-            ),
-          ),
-          if (_isProcessing)
-            Container(
-              color: Colors.black45,
-              child: const Center(
-                child: CircularProgressIndicator(),
-              ),
-            ),
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 16,
-            left: 16,
-            child: IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white),
-              onPressed: () => Navigator.pop(context),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   void _onQRViewCreated(QRViewController controller) {
@@ -893,8 +794,7 @@ class _AdminDashboardState extends State<AdminDashboard> with WidgetsBindingObse
 
                               await batch.commit();
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const Snack
-Bar(content: Text('Réparation mise à jour avec succès!')),
+                                const SnackBar(content: Text('Réparation mise à jour avec succès!')),
                               );
                             },
                             tooltip: 'Enregistrer la réparation',
@@ -998,6 +898,7 @@ Bar(content: Text('Réparation mise à jour avec succès!')),
               child: TextButton(
                 style: TextButton.styleFrom(
                   backgroundColor: Colors.yellow,
+                  
                   foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
@@ -1283,30 +1184,93 @@ Bar(content: Text('Réparation mise à jour avec succès!')),
       ),
     );
   }
-}
-
-class ImageViewerPage extends StatelessWidget {
-  final String imageUrl;
-
-  const ImageViewerPage({super.key, required this.imageUrl});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          minScale: 0.5,
-          maxScale: 4.0,
-          child: Hero(
-            tag: imageUrl,
-            child: Image.network(imageUrl),
+        title: const Text('Scanner QR Code'),
+        actions: [
+          IconButton(
+            icon: Icon(_isFlashOn ? Icons.flash_on : Icons.flash_off),
+            onPressed: _toggleFlash,
           ),
-        ),
+          IconButton(
+            icon: const Icon(Icons.flip_camera_ios),
+            onPressed: _switchCamera,
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          QRView(
+            key: _qrKey,
+            onQRViewCreated: _onQRViewCreated,
+            overlay: QrScannerOverlayShape(
+              borderColor: Theme.of(context).primaryColor,
+              borderRadius: 10,
+              borderLength: 30,
+              borderWidth: 10,
+              cutOutSize: MediaQuery.of(context).size.width * 0.8,
+            ),
+          ),
+          Positioned(
+            bottom: 24,
+            left: 24,
+            right: 24,
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.zoom_in, color: Colors.white),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Slider(
+                          value: _zoomLevel,
+                          min: 0,
+                          max: 5,
+                          onChanged: _setZoomLevel,
+                        ),
+                      ),
+                      Text(
+                        '${(_zoomLevel * 100).toInt()}%',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Placez le QR code dans le cadre',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black.withOpacity(0.5),
+                        offset: const Offset(1, 1),
+                        blurRadius: 2,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_isProcessing)
+            Container(
+              color: Colors.black54,
+              child: const Center(
+                child: CircularProgressIndicator(),
+              ),
+            ),
+        ],
       ),
     );
   }
